@@ -6,11 +6,11 @@
 include build.mk
 
 test:
-	cd .. && sbt "project soc" test
+	sbt test
 
 verilator:
 	@if java -version >/dev/null 2>&1; then \
-		cd .. && PATH=$$HOME/.local/bin:$$PATH sbt "project soc" "runMain board.verilator.VerilogGenerator"; \
+		PATH=$$HOME/.local/bin:$$PATH sbt "runMain board.verilator.VerilogGenerator"; \
 	else \
 		echo "⚠️  Java runtime not found; using existing generated Verilog in verilog/verilator"; \
 		if [ ! -f verilog/verilator/Top.v ]; then \
@@ -54,7 +54,7 @@ compliance: check-riscof
 	@echo "📊 View report: results/report.html"
 
 clean:
-	cd .. && sbt "project soc" clean
+	sbt clean
 	$(RM) -r test_run_dir
 	$(RM) -r verilog/verilator/obj_dir
 	$(RM) verilog/verilator/*.v

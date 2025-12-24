@@ -1,4 +1,4 @@
-CROSS_COMPILE ?= $(HOME)/rv/toolchain/bin/riscv-none-elf-
+CROSS_COMPILE ?= $(HOME)/riscv-none-elf-gcc/bin/riscv-none-elf-
 
 ASFLAGS = -march=rv32i_zicsr -mabi=ilp32
 CFLAGS = -O0 -Wall -march=rv32i_zicsr -mabi=ilp32
@@ -18,7 +18,7 @@ OBJCOPY := $(CROSS_COMPILE)objcopy
 all: nyancat.asmbin uart.asmbin
 
 # All programs use proper init.S with ABI compliance and .bss clearing
-nyancat.asmbin: nyancat.c nyancat-data.h init.o
+nyancat.asmbin: nyancat.c nyancat-frames.h init.o
 	$(CC) $(CFLAGS) -DNYANCAT_COMPRESSION_DELTA=$(NYANCAT_COMPRESSION_DELTA) -c -o nyancat.o nyancat.c
 	$(CROSS_COMPILE)ld -o nyancat.elf -T link.lds $(LDFLAGS) nyancat.o init.o
 	$(OBJCOPY) -O binary -j .text -j .data nyancat.elf $@
@@ -45,7 +45,7 @@ else
 endif
 
 # Nyancat build depends on generated data
-nyancat.o: nyancat.c nyancat-data.h
+nyancat.o: nyancat.c nyancat-frames.h
 
 update: nyancat.asmbin uart.asmbin
 	cp -f nyancat.asmbin uart.asmbin ../src/main/resources
