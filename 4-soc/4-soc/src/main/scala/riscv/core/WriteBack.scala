@@ -25,7 +25,8 @@ class WriteBack extends Module {
     IndexedSeq(
       RegWriteSource.Memory                 -> io.memory_read_data,
       RegWriteSource.CSR                    -> io.csr_read_data,
-      RegWriteSource.NextInstructionAddress -> (io.instruction_address + 4.U)
+      RegWriteSource.NextInstructionAddress -> (io.instruction_address + 4.U),
+      CustomRegWriteSource.SFU              -> io.alu_result  // SFU result comes through alu_result
     )
   )
 }

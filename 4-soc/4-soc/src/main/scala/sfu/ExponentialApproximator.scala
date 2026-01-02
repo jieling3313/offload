@@ -7,17 +7,24 @@ import chisel3.util._
 
 /**
  * 使用分段線性方法的指數逼近器
- * 算法: 對於第 i 段, exp(x) ≈ a_i * x + b_i
- * 輸入範圍: [-10, 10] (超出範圍的值會飽和)
+ *
+ * Algorithm: For segment i, exp(x) ≈ a_i * x + b_i
+ *
+ * Input範圍: [-10, 10] (超出範圍的值會飽和)
+ *
  * 段數: 16 段
+ *
  * Latency: 5 cycles (pipelined)
- *  Pipeline Design (5-stage):
- *    Stage 1: Range check + Segment selection
- *    Stage 2: LUT lookup for coefficients
- *    Stage 3: FP Multiply - Sign & Exponent calculation
- *    Stage 4: FP Multiply - Mantissa multiplication & Normalization
- *    Stage 5: FP Addition (a*x + b)
- * w/ IEEE 754 single-precision floating-point format
+ *
+ * Pipeline Design (5-stage):
+ *   Stage 1: Range check + Segment selection
+ *   Stage 2: LUT lookup for coefficients
+ *   Stage 3: FP Multiply - Sign & Exponent calculation
+ *   Stage 4: FP Multiply - Mantissa multiplication & Normalization
+ *   Stage 5: FP Addition (a*x + b)
+ *
+ * Precision: Maximum relative error ~23% (average ~5.5%)
+ * IEEE 754 single-precision floating-point format
  */
 
 class ExponentialApproximator extends Module {
@@ -31,7 +38,10 @@ class ExponentialApproximator extends Module {
 
   /* Pipeline Registers (5 stages)*/
 
-  val stage1_reg = Reg(UInt(32.W))
+  val stage1_reg = Reg(new Bundle {
+    val input = UInt(32.W)
+    val segment_idx = UInt(4.W)
+  })
   val stage2_reg = Reg(new Bundle {
     val input = UInt(32.W)
     val coeff_a = UInt(32.W)
@@ -64,18 +74,33 @@ class ExponentialApproximator extends Module {
   val exponent = io.in(30, 23)
   val mantissa = io.in(22, 0)
 
-  // Range check based on exponent
+  // Range check using IEEE 754 comparison
   // exp(x) for x > 10 saturates to large value (0x41200000 = +10.0)
   // exp(x) for x < -10 saturates to ~0 (0xC1200000 = -10.0)
-  val is_large_positive = exponent >= "b10000010".U  // > ~10
-  val is_large_negative = sign === 1.U && exponent >= "b10000010".U  // < -10
+
+  // Define boundary constants
+  val pos_10 = "h41200000".U  // +10.0
+  val neg_10 = "hC1200000".U  // -10.0
+
+  // IEEE 754 comparison helper (defined below for segment selection)
+  // Will be used here once defined
+
+  val is_large_positive = sign === 0.U && (
+    (exponent > "b10000010".U) ||  // exp > 130
+    (exponent === "b10000010".U && mantissa >= "b001000000000000000000000".U)  // exp==130 and mant >= 0x200000 (i.e., >= 10.0)
+  )
+
+  val is_large_negative = sign === 1.U && (
+    (exponent > "b10000010".U) ||  // exp > 130
+    (exponent === "b10000010".U && mantissa >= "b001000000000000000000000".U)  // exp==130 and mant >= 0x200000 (i.e., <= -10.0)
+  )
 
   // input to valid range
   val input_clamped = Wire(UInt(32.W))
   input_clamped := Mux(is_large_positive,
-                      "h41200000".U,  // +10.0 in IEEE 754
+                      pos_10,  // +10.0
                       Mux(is_large_negative,
-                          "hC1200000".U,  // -10.0 in IEEE 754
+                          neg_10,  // -10.0
                           io.in))
 
   // Compute segment index (4 bits, 0-15)
@@ -83,36 +108,91 @@ class ExponentialApproximator extends Module {
   // Each segment covers: 20 / 16 = 1.25 units
   val segment_idx = Wire(UInt(4.W))
 
-  // Extract biased exponent (remove IEEE 754 bias of 127)
-  val exp_biased = exponent.asSInt - 127.S
+  // Define 15 boundary values (IEEE 754 format)
+  // These boundaries separate the 16 segments
+  val boundary_1  = "hC10C0000".U  //  -8.75  (between segment 0 and 1)
+  val boundary_2  = "hC0F00000".U  //  -7.50  (between segment 1 and 2)
+  val boundary_3  = "hC0C80000".U  //  -6.25  (between segment 2 and 3)
+  val boundary_4  = "hC0A00000".U  //  -5.00  (between segment 3 and 4)
+  val boundary_5  = "hC0700000".U  //  -3.75  (between segment 4 and 5)
+  val boundary_6  = "hC0200000".U  //  -2.50  (between segment 5 and 6)
+  val boundary_7  = "hBFA00000".U  //  -1.25  (between segment 6 and 7)
+  val boundary_8  = "h00000000".U  //   0.00  (between segment 7 and 8)
+  val boundary_9  = "h3FA00000".U  //   1.25  (between segment 8 and 9)
+  val boundary_10 = "h40200000".U  //   2.50  (between segment 9 and 10)
+  val boundary_11 = "h40700000".U  //   3.75  (between segment 10 and 11)
+  val boundary_12 = "h40A00000".U  //   5.00  (between segment 11 and 12)
+  val boundary_13 = "h40C80000".U  //   6.25  (between segment 12 and 13)
+  val boundary_14 = "h40F00000".U  //   7.50  (between segment 13 and 14)
+  val boundary_15 = "h410C0000".U  //   8.75  (between segment 14 and 15)
 
-  // Simplified segment selection based on exponent
-  val segment_approx = Mux(sign === 0.U,
-    // Positive numbers: map to upper segments (8-15)
-    Mux(exp_biased >= 0.S,
-      (8.U + exp_biased.asUInt)(3, 0),
-      8.U),
-    // Negative numbers: map to lower segments (0-7)
-    Mux(exp_biased >= 0.S,
-      (7.U - exp_biased.asUInt)(3, 0),
-      0.U)
-  )
+  // Compare input against boundaries
+  // IEEE 754 comparison helper: a < b?
+  // Implements IEEE 754 comparison with three cases:
+  //   1. Different signs: negative (sign=1) < positive (sign=0)
+  //   2. Both positive: compare as unsigned (normal ordering)
+  //   3. Both negative: reverse comparison (more negative bits = smaller value)
+  def fpLessThan(a: UInt, b: UInt): Bool = {
+    val a_sign = a(31)
+    val b_sign = b(31)
 
-  segment_idx := Mux(segment_approx > 15.U, 15.U, segment_approx)
+    Mux(a_sign =/= b_sign,
+      a_sign.asBool,  // Different signs: a < b if a is negative (sign=1)
+      Mux(a_sign === 0.U,
+        a < b,   // Both positive: normal unsigned comparison
+        a > b    // Both negative: reverse (ex: 0xC0A00000 < 0xC1200000 i.e. -5.0 > -10.0)
+      )
+    )
+  }
+
+  when(fpLessThan(input_clamped, boundary_1)) {
+    segment_idx := 0.U  // [-10.00, -8.75)
+  }.elsewhen(fpLessThan(input_clamped, boundary_2)) {
+    segment_idx := 1.U  // [-8.75, -7.50)
+  }.elsewhen(fpLessThan(input_clamped, boundary_3)) {
+    segment_idx := 2.U  // [-7.50, -6.25)
+  }.elsewhen(fpLessThan(input_clamped, boundary_4)) {
+    segment_idx := 3.U  // [-6.25, -5.00)
+  }.elsewhen(fpLessThan(input_clamped, boundary_5)) {
+    segment_idx := 4.U  // [-5.00, -3.75)
+  }.elsewhen(fpLessThan(input_clamped, boundary_6)) {
+    segment_idx := 5.U  // [-3.75, -2.50)
+  }.elsewhen(fpLessThan(input_clamped, boundary_7)) {
+    segment_idx := 6.U  // [-2.50, -1.25)
+  }.elsewhen(fpLessThan(input_clamped, boundary_8)) {
+    segment_idx := 7.U  // [-1.25,  0.00)
+  }.elsewhen(fpLessThan(input_clamped, boundary_9)) {
+    segment_idx := 8.U  // [ 0.00,  1.25)
+  }.elsewhen(fpLessThan(input_clamped, boundary_10)) {
+    segment_idx := 9.U  // [ 1.25,  2.50)
+  }.elsewhen(fpLessThan(input_clamped, boundary_11)) {
+    segment_idx := 10.U // [ 2.50,  3.75)
+  }.elsewhen(fpLessThan(input_clamped, boundary_12)) {
+    segment_idx := 11.U // [ 3.75,  5.00)
+  }.elsewhen(fpLessThan(input_clamped, boundary_13)) {
+    segment_idx := 12.U // [ 5.00,  6.25)
+  }.elsewhen(fpLessThan(input_clamped, boundary_14)) {
+    segment_idx := 13.U // [ 6.25,  7.50)
+  }.elsewhen(fpLessThan(input_clamped, boundary_15)) {
+    segment_idx := 14.U // [ 7.50,  8.75)
+  }.otherwise {
+    segment_idx := 15.U // [ 8.75, 10.00]
+  }
 
   // Store for next stage: input and segment index
-  stage1_reg := Cat(segment_idx, input_clamped(27, 0))
+  stage1_reg.input := input_clamped
+  stage1_reg.segment_idx := segment_idx
 
   /* Stage 2: LUT Lookup for Coefficients */
-  
-  val segment_s2 = stage1_reg(31, 28)
-  val input_s2 = Cat(0.U(4.W), stage1_reg(27, 0))
+
+  val segment_s2 = stage1_reg.segment_idx
+  val input_s2 = stage1_reg.input
 
   // Lookup tables for piecewise linear coefficients
   // Format: For i, exp(x) ≈ a[i] * x + b[i]
 
   // **These coefficients are PLACEHOLDERS and need to be computed offline (compute_lut_coefficients.py)**
-  // for optimal accuracy across the input range.
+
   // Coefficient computation method:
   // For each segment [x_min, x_max]:
   //   1. Sample points at x_min and x_max
@@ -206,29 +286,43 @@ class ExponentialApproximator extends Module {
   val mult_sign_s4 = stage3_reg.mult_sign
   val mult_exp_s4 = stage3_reg.mult_exp
 
+  // Check for zero operands (check full 32 bits, not just exponent)
+  // Note: Only skip multiplication if operand is 0x00000000
+  // exp=0, mant!=0 are rare in our range and can be handled normally
+  val input_is_zero = input_s4 === 0.U
+  val coeff_is_zero = coeff_a_s4 === 0.U
+
   // Extract mantissas (24 bits each with implicit leading 1)
   val mant_input_s4 = Cat(1.U(1.W), input_s4(22, 0))
   val mant_a_s4 = Cat(1.U(1.W), coeff_a_s4(22, 0))
 
-  // Multiply mantissas (24 bits × 24 bits = 48 bits)
+  // Multiply mantissas (24 bits x 24 bits = 48 bits)
   val mant_product = mant_input_s4 * mant_a_s4
 
-  // Normalize: check if bit 47 is set (result >= 2.0)
+  // Normalize: Find the position of the leading 1 in the 48-bit product
+  // For 24-bit x 24-bit multiplication with implicit leading 1s:
+  // (1.xxx x 1.yyy) results in range [1.0, 4.0), so leading 1 is at bit 47 or 46
   val normalized_mant_s4 = Wire(UInt(23.W))
   val normalized_exp_s4 = Wire(UInt(8.W))
 
   when(mant_product(47) === 1.U) {
-    // Overflow: shift right by 1, increment exponent
+    // Leading 1 at bit 47: result in [2.0, 4.0)
+    // Shift right by 1, increment exponent
     normalized_mant_s4 := mant_product(46, 24)
     normalized_exp_s4 := mult_exp_s4 + 1.U
-  }.otherwise {
-    // Normal: use bits [45:23]
+  }.elsewhen(mant_product(46) === 1.U) {
+    // Leading 1 at bit 46: result in [1.0, 2.0)
+    // Normal case, use bits [45:23]
     normalized_mant_s4 := mant_product(45, 23)
     normalized_exp_s4 := mult_exp_s4
+  }.otherwise {
+    normalized_mant_s4 := mant_product(44, 22)
+    normalized_exp_s4 := mult_exp_s4 - 1.U
   }
-
-  // Assemble multiplication result
-  val mult_result_s4 = Cat(mult_sign_s4, normalized_exp_s4, normalized_mant_s4)
+  val mult_result_s4 = Mux(input_is_zero || coeff_is_zero,
+    0.U(32.W),
+    Cat(mult_sign_s4, normalized_exp_s4, normalized_mant_s4)
+  )
 
   // Store for next stage
   stage4_reg.mult_result := mult_result_s4
@@ -240,7 +334,7 @@ class ExponentialApproximator extends Module {
   val coeff_b_s5 = stage4_reg.coeff_b
 
   // Instantiate FP adder for final addition
-  val fp_adder = Module(new FPAdderSingleCycle)
+  val fp_adder = Module(new FPAdder)
   fp_adder.io.a := mult_result_s5
   fp_adder.io.b := coeff_b_s5
 
@@ -253,86 +347,4 @@ class ExponentialApproximator extends Module {
   io.out := stage5_reg
   io.out_valid := valid5
   io.ready := true.B  // Always ready in this implementation
-}
-
-/**
- * Single-Cycle Floating-Point Adder
- * This is a simplified FP adder that completes in one cycle.
- * For production use, this should be replaced with a fully
- * compliant IEEE 754 adder with proper rounding and special case handling.
- */
-class FPAdderSingleCycle extends Module {
-  val io = IO(new Bundle {
-    val a = Input(UInt(32.W))
-    val b = Input(UInt(32.W))
-    val result = Output(UInt(32.W))
-  })
-
-  // Extract components from operand A
-  val sign_a = io.a(31)
-  val exp_a = io.a(30, 23)
-  val mant_a = Cat(1.U(1.W), io.a(22, 0))
-
-  // Extract components from operand B
-  val sign_b = io.b(31)
-  val exp_b = io.b(30, 23)
-  val mant_b = Cat(1.U(1.W), io.b(22, 0))
-
-  // Determine which operand has larger exponent
-  val exp_diff = exp_a.asSInt - exp_b.asSInt
-
-  val larger_exp = Mux(exp_diff >= 0.S, exp_a, exp_b)
-  val aligned_mant_a = Mux(exp_diff >= 0.S,
-    Cat(mant_a, 0.U(2.W)),
-    Cat(mant_a, 0.U(2.W)) >> (-exp_diff).asUInt
-  )
-  val aligned_mant_b = Mux(exp_diff >= 0.S,
-    Cat(mant_b, 0.U(2.W)) >> exp_diff.asUInt,
-    Cat(mant_b, 0.U(2.W))
-  )
-
-  // Add or subtract based on signs
-  val mant_sum = Wire(UInt(27.W))
-  val result_sign = Wire(Bool())
-
-  when(sign_a === sign_b) {
-    // Same sign: add
-    mant_sum := aligned_mant_a +& aligned_mant_b
-    result_sign := sign_a
-  }.otherwise {
-    // Different signs: subtract
-    when(aligned_mant_a >= aligned_mant_b) {
-      mant_sum := aligned_mant_a - aligned_mant_b
-      result_sign := sign_a
-    }.otherwise {
-      mant_sum := aligned_mant_b - aligned_mant_a
-      result_sign := sign_b
-    }
-  }
-
-  // Normalize result
-  val normalized_mant = Wire(UInt(23.W))
-  val normalized_exp = Wire(UInt(8.W))
-
-  when(mant_sum(26) === 1.U) {
-    // Overflow: shift right
-    normalized_mant := mant_sum(25, 3)
-    normalized_exp := larger_exp + 1.U
-  }.elsewhen(mant_sum(25) === 1.U) {
-    // Normal
-    normalized_mant := mant_sum(24, 2)
-    normalized_exp := larger_exp
-  }.otherwise {
-    // Underflow or zero: simplified handling
-    normalized_mant := mant_sum(22, 0)
-    normalized_exp := larger_exp
-  }
-
-  // Handle zero case
-  val is_zero = mant_sum === 0.U
-
-  io.result := Mux(is_zero,
-    0.U(32.W),
-    Cat(result_sign, normalized_exp, normalized_mant)
-  )
 }

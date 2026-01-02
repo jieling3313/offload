@@ -49,6 +49,9 @@ class InstructionDecode extends Module {
   val rs1    = io.instruction(19, 15)
   val rs2    = io.instruction(24, 20)
 
+  // Check for custom instructions
+  val is_custom_instruction = CustomInstructions.isCustomInstruction(io.instruction)
+
   // Track which operands are actually used to avoid false hazards/stalls on
   // encodings that reuse rs1/rs2 bits for immediates (JAL, CSR immediate, etc.).
   val csr_uses_uimm = opcode === Instructions.csr && (
@@ -58,8 +61,10 @@ class InstructionDecode extends Module {
   )
   val uses_rs1 = (opcode === InstructionTypes.RM) || (opcode === InstructionTypes.I) ||
     (opcode === InstructionTypes.L) || (opcode === InstructionTypes.S) || (opcode === InstructionTypes.B) ||
-    (opcode === Instructions.jalr) || (opcode === Instructions.csr && !csr_uses_uimm)
-  val uses_rs2 = (opcode === InstructionTypes.RM) || (opcode === InstructionTypes.S) || (opcode === InstructionTypes.B)
+    (opcode === Instructions.jalr) || (opcode === Instructions.csr && !csr_uses_uimm) ||
+    is_custom_instruction  // Custom instructions use rs1
+  val uses_rs2 = (opcode === InstructionTypes.RM) || (opcode === InstructionTypes.S) || (opcode === InstructionTypes.B) ||
+    is_custom_instruction  // Custom instructions use rs2
 
   io.regs_reg1_read_address := Mux(uses_rs1, rs1, 0.U(Parameters.PhysicalRegisterAddrWidth))
   io.regs_reg2_read_address := Mux(uses_rs2, rs2, 0.U(Parameters.PhysicalRegisterAddrWidth))
@@ -102,20 +107,25 @@ class InstructionDecode extends Module {
   )
   io.ex_memory_read_enable  := opcode === InstructionTypes.L
   io.ex_memory_write_enable := opcode === InstructionTypes.S
-  io.ex_reg_write_source := MuxLookup(
-    opcode,
-    RegWriteSource.ALUResult
-  )(
-    IndexedSeq(
-      InstructionTypes.L -> RegWriteSource.Memory,
-      Instructions.csr   -> RegWriteSource.CSR,
-      Instructions.jal   -> RegWriteSource.NextInstructionAddress,
-      Instructions.jalr  -> RegWriteSource.NextInstructionAddress
+  io.ex_reg_write_source := Mux(
+    is_custom_instruction,
+    CustomRegWriteSource.SFU,  // Custom instructions write from SFU
+    MuxLookup(
+      opcode,
+      RegWriteSource.ALUResult
+    )(
+      IndexedSeq(
+        InstructionTypes.L -> RegWriteSource.Memory,
+        Instructions.csr   -> RegWriteSource.CSR,
+        Instructions.jal   -> RegWriteSource.NextInstructionAddress,
+        Instructions.jalr  -> RegWriteSource.NextInstructionAddress
+      )
     )
   )
   io.ex_reg_write_enable := (opcode === InstructionTypes.RM) || (opcode === InstructionTypes.I) ||
     (opcode === InstructionTypes.L) || (opcode === Instructions.auipc) || (opcode === Instructions.lui) ||
-    (opcode === Instructions.jal) || (opcode === Instructions.jalr) || (opcode === Instructions.csr)
+    (opcode === Instructions.jal) || (opcode === Instructions.jalr) || (opcode === Instructions.csr) ||
+    is_custom_instruction  // Custom instructions write to rd
   io.ex_reg_write_address := io.instruction(11, 7)
   io.ex_csr_address       := io.instruction(31, 20)
   io.ex_csr_write_enable := (opcode === Instructions.csr) && (

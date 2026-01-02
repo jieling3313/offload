@@ -18,10 +18,14 @@ import chisel3.util._
  * 2. Newton-Raphson refinement: y_new = y * (1.5 - 0.5 * x * y * y)
  *
  * Accuracy:
- * - 1 iteration: ~1% error
+ * - Magic constant only: ~3-4% error
+ * - 1 iteration: ~0.5-1% error
  * - 2 iterations: ~0.1% error
  *
- * Latency: 3-4 cycles (pipelined)
+ * Pipeline Latency: 11 cycles (was 3 cycles with placeholders)
+ * - Stage 0: Magic constant y0
+ * - Stages 1-5: First Newton-Raphson iteration
+ * - Stages 6-10: Second Newton-Raphson iteration
  *
  * Uses IEEE 754 single-precision floating-point format
  */
@@ -34,220 +38,146 @@ class InvSqrt extends Module {
     val out_valid = Output(Bool())   // Output valid
   })
 
-  // Pipeline stages
+  // Pipeline stages (11 stages total for 2 Newton-Raphson iterations)
   val stage1_reg = Reg(UInt(32.W))
   val stage2_reg = Reg(UInt(32.W))
   val stage3_reg = Reg(UInt(32.W))
+  val stage4_reg = Reg(UInt(32.W))
+  val stage5_reg = Reg(UInt(32.W))
+  val stage6_reg = Reg(UInt(32.W))
+  val stage7_reg = Reg(UInt(32.W))
+  val stage8_reg = Reg(UInt(32.W))
+  val stage9_reg = Reg(UInt(32.W))
+  val stage10_reg = Reg(UInt(32.W))
+  val stage11_reg = Reg(UInt(32.W))
 
+  // Valid signal pipeline
   val valid1 = RegNext(io.valid, false.B)
   val valid2 = RegNext(valid1, false.B)
   val valid3 = RegNext(valid2, false.B)
+  val valid4 = RegNext(valid3, false.B)
+  val valid5 = RegNext(valid4, false.B)
+  val valid6 = RegNext(valid5, false.B)
+  val valid7 = RegNext(valid6, false.B)
+  val valid8 = RegNext(valid7, false.B)
+  val valid9 = RegNext(valid8, false.B)
+  val valid10 = RegNext(valid9, false.B)
+  val valid11 = RegNext(valid10, false.B)
+
+  // Input value pipeline
+  val x_s1 = RegNext(io.in)
+  val x_s2 = RegNext(x_s1)
+  val x_s3 = RegNext(x_s2)
+  val x_s4 = RegNext(x_s3)
+  val x_s5 = RegNext(x_s4)
+  val x_s6 = RegNext(x_s5)
+  val x_s7 = RegNext(x_s6)
+  val x_s8 = RegNext(x_s7)
+  val x_s9 = RegNext(x_s8)
+  val x_s10 = RegNext(x_s9)
 
   // Constants
   val MAGIC_CONSTANT = "h5f3759df".U(32.W)  // Quake III magic number
   val THREE_HALVES = "h3fc00000".U(32.W)    // 1.5 in IEEE 754
   val HALF = "h3f000000".U(32.W)            // 0.5 in IEEE 754
 
-  /* Stage 1: Magic constant initial guess */
-
-  // The Quake III trick:
-  // Treat float bits as integer, shift right by 1, subtract from magic constant
+  /* Stage 0: Magic constant initial guess */
 
   val input_bits = io.in
   val half_input = input_bits >> 1  // Logical shift right
 
-  // Initial approximation
+  // Initial approximation using magic constant
   val y0 = MAGIC_CONSTANT - half_input
 
   stage1_reg := y0
 
-  /* Stage 2: First Newton-Raphson iteration */
+  /* First Newton-Raphson Iteration: y1 = y0 * (1.5 - 0.5 * x * y0²) */
 
-  // Iteration formula: y1 = y0 * (1.5 - 0.5 * x * y0 * y0)
-  //
-  // This requires:
-  // 1. y0 * y0
-  // 2. x * (y0 * y0)
-  // 3. 0.5 * x * (y0 * y0)
-  // 4. 1.5 - 3.( 0.5 * x * (y0 * y0) )
-  // 5. y0 * 4. ( 1.5 - 3.( 0.5 * x * (y0 * y0) ) )
+  // Stage 1: Compute y0_sq
+  val mult_y0_sq = Module(new FPMultiplier)
+  mult_y0_sq.io.a := stage1_reg
+  mult_y0_sq.io.b := stage1_reg
+  val y0_squared = mult_y0_sq.io.result
+  stage2_reg := y0_squared
 
-  val y0_s2 = stage1_reg
-  val x_s2 = RegNext(input_bits)
+  // Stage 2: Compute x * y0²
+  // At this stage, stage2_reg has y0² from input at cycle N
+  // We need x from the same input, which is x delayed by 2 cycles
+  val mult_x_y0sq = Module(new FPMultiplier)
+  mult_x_y0sq.io.a := x_s2  // Fixed: was x_s1, should be x_s2 to align with stage2_reg
+  mult_x_y0sq.io.b := stage2_reg
+  val x_y0sq = mult_x_y0sq.io.result
+  stage3_reg := x_y0sq
 
-  // Placeholder for FP operations
-  // TODO: Use proper IEEE 754 multiplier and subtractor
+  // Stage 3: Compute 0.5 * x * y0²
+  val mult_half = Module(new FPMultiplier)
+  mult_half.io.a := HALF
+  mult_half.io.b := stage3_reg
+  val half_x_y0sq = mult_half.io.result
+  stage4_reg := half_x_y0sq
 
-  // y0 * y0
-  val y0_squared = Wire(UInt(32.W))
-  y0_squared := y0_s2
+  // Stage 4: Compute 1.5 - 0.5 * x * y0²
+  val sub = Module(new FPSubtractor)
+  sub.io.a := THREE_HALVES
+  sub.io.b := stage4_reg
+  val factor = sub.io.result
+  stage5_reg := factor
 
-  // 0.5 * x * y0^2
-  val half_x_y0sq = Wire(UInt(32.W))
-  half_x_y0sq := x_s2 
+  // Stage 5: Compute y1 = y0 * (1.5 - 0.5 * x * y0²)
+  // At this stage, stage5_reg has factor from input at cycle N
+  // Need y0 from the same input = stage1_reg delayed by 4 cycles
+  val y0_s5 = RegNext(RegNext(RegNext(RegNext(stage1_reg))))
+  val mult_y1 = Module(new FPMultiplier)
+  mult_y1.io.a := y0_s5
+  mult_y1.io.b := stage5_reg
+  val y1 = mult_y1.io.result
+  stage6_reg := y1
 
-  // 1.5 - (0.5 * x * y0^2)
-  val factor = Wire(UInt(32.W))
-  factor := THREE_HALVES
+  /* Second Newton-Raphson Iteration: y2 = y1 * (1.5 - 0.5 * x * y1²) */
 
-  // y0 * factor
-  val y1 = Wire(UInt(32.W))
-  y1 := y0_s2
+  // Stage 6: Compute y1²
+  val mult_y1_sq = Module(new FPMultiplier)
+  mult_y1_sq.io.a := stage6_reg
+  mult_y1_sq.io.b := stage6_reg
+  val y1_squared = mult_y1_sq.io.result
+  stage7_reg := y1_squared
 
-  stage2_reg := y1
+  // Stage 7: Compute x * y1²
+  // At this stage, stage7_reg has y1² from input at cycle N
+  // Need x from the same input = x delayed by 7 cycles
+  val mult_x_y1sq = Module(new FPMultiplier)
+  mult_x_y1sq.io.a := x_s7
+  mult_x_y1sq.io.b := stage7_reg
+  val x_y1sq = mult_x_y1sq.io.result
+  stage8_reg := x_y1sq
 
-  /* Stage 3: Second Newton-Raphson iteration (optional) */
+  // Stage 8: Compute 0.5 * x * y1²
+  val mult_half2 = Module(new FPMultiplier)
+  mult_half2.io.a := HALF
+  mult_half2.io.b := stage8_reg
+  val half_x_y1sq = mult_half2.io.result
+  stage9_reg := half_x_y1sq
 
-  // Same formula: y2 = y1 * (1.5 - 0.5 * x * y1 * y1)
-  // This improves accuracy to ~0.1% error
+  // Stage 9: Compute 1.5 - 0.5 * x * y1²
+  val sub2 = Module(new FPSubtractor)
+  sub2.io.a := THREE_HALVES
+  sub2.io.b := stage9_reg
+  val factor2 = sub2.io.result
+  stage10_reg := factor2
 
-  val y1_s3 = stage2_reg
-  val x_s3 = RegNext(RegNext(input_bits))
-
-  // Repeat the Newton-Raphson step
-  val y1_squared = Wire(UInt(32.W))
-  y1_squared := y1_s3
-
-  val half_x_y1sq = Wire(UInt(32.W))
-  half_x_y1sq := x_s3
-
-  val factor2 = Wire(UInt(32.W))
-  factor2 := THREE_HALVES
-
-  val y2 = Wire(UInt(32.W))
-  y2 := y1_s3
-
-  stage3_reg := y2
+  // Stage 10: Compute y2 = y1 * (1.5 - 0.5 * x * y1²)
+  // At this stage, stage10_reg has factor2 from input at cycle N
+  // Need y1 from the same input = stage6_reg delayed by 4 cycles
+  val y1_s10 = RegNext(RegNext(RegNext(RegNext(stage6_reg))))
+  val mult_y2 = Module(new FPMultiplier)
+  mult_y2.io.a := y1_s10
+  mult_y2.io.b := stage10_reg
+  val y2 = mult_y2.io.result
+  stage11_reg := y2
 
   /* Output */
 
-  io.out := stage3_reg
-  io.out_valid := valid3
+  io.out := stage11_reg
+  io.out_valid := valid11
   io.ready := true.B  // Always ready in this implementation
 }
-
-/**
- * Floating-Point Multiplier Module (IEEE 754)
- *
- * This is a helper module for FP multiplication
- * Used internally by **InvSqrt** for Newton-Raphson iterations
- */
-class FPMultiplier extends Module {
-  val io = IO(new Bundle {
-    val a = Input(UInt(32.W))
-    val b = Input(UInt(32.W))
-    val result = Output(UInt(32.W))
-  })
-
-  // Extract components
-  val sign_a = io.a(31)
-  val exp_a = io.a(30, 23)
-  val mant_a = Cat(1.U(1.W), io.a(22, 0))  // Add implicit leading 1
-
-  val sign_b = io.b(31)
-  val exp_b = io.b(30, 23)
-  val mant_b = Cat(1.U(1.W), io.b(22, 0))
-
-  // Result sign: XOR of input signs
-  val sign_result = sign_a ^ sign_b
-
-  // Result exponent: sum of exponents minus bias (127)
-  val exp_sum = exp_a +& exp_b
-  val exp_result = exp_sum - 127.U
-
-  // Mantissa multiplication (24 bits x 24 bits = 48 bits)
-  val mant_product = mant_a * mant_b
-
-  // Normalize: if bit 47 is set, shift right and increment exponent
-  val normalized_mant = Wire(UInt(23.W))
-  val normalized_exp = Wire(UInt(8.W))
-
-  when(mant_product(47) === 1.U) {
-    normalized_mant := mant_product(46, 24)
-    normalized_exp := exp_result + 1.U
-  }.otherwise {
-    normalized_mant := mant_product(45, 23)
-    normalized_exp := exp_result
-  }
-
-  // Assemble result
-  io.result := Cat(sign_result, normalized_exp, normalized_mant)
-}
-
-/**
- * Floating-Point Subtractor Module (IEEE 754)
- *
- * Computes a - b for positive operands
- * Simplified implementation
- */
-class FPSubtractor extends Module {
-  val io = IO(new Bundle {
-    val a = Input(UInt(32.W))
-    val b = Input(UInt(32.W))
-    val result = Output(UInt(32.W))
-  })
-
-  // Extract components
-  val sign_a = io.a(31)
-  val exp_a = io.a(30, 23)
-  val mant_a = Cat(1.U(1.W), io.a(22, 0))
-
-  val sign_b = io.b(31)
-  val exp_b = io.b(30, 23)
-  val mant_b = Cat(1.U(1.W), io.b(22, 0))
-
-  // Align exponents
-  val exp_diff = exp_a.asSInt - exp_b.asSInt
-
-  val aligned_mant_a = Wire(UInt(24.W))
-  val aligned_mant_b = Wire(UInt(24.W))
-  val result_exp = Wire(UInt(8.W))
-
-  when(exp_diff(7) === 1.U) {  // exp_a < exp_b
-    aligned_mant_a := mant_a >> (-exp_diff).asUInt(4, 0)
-    aligned_mant_b := mant_b
-    result_exp := exp_b
-  }.otherwise {  // exp_a >= exp_b
-    aligned_mant_a := mant_a
-    aligned_mant_b := mant_b >> exp_diff.asUInt(4, 0)
-    result_exp := exp_a
-  }
-
-  // Subtract mantissas
-  val mant_result = aligned_mant_a - aligned_mant_b
-
-  // Normalize (find leading 1)
-  // Simplified: just use upper 23 bits
-  val normalized_mant = mant_result(22, 0)
-
-  // Result sign (assume a > b for simplicity)
-  val sign_result = 0.U
-
-  io.result := Cat(sign_result, result_exp, normalized_mant)
-}
-
-/**
- * TODO for complete implementation:
- *
- * 1. Integrate FPMultiplier and FPSubtractor into InvSqrt
- *    - Replace placeholder operations with actual modules
- *
- * 2. Handle special cases:
- *    - Input = 0: return Inf
- *    - Input < 0: return NaN (invalid)
- *    - Input = Inf: return 0
- *    - Input = NaN: return NaN
- *
- * 3. Optimize FP arithmetic modules:
- *    - Proper rounding (round-to-nearest-even)
- *    - Handle denormalized numbers
- *    - Overflow/underflow detection
- *
- * 4. Pipeline optimization:
- *    - Balance stages for critical path
- *    - Add bypass logic if needed
- *
- * 5. Accuracy validation:
- *    - Test against reference sqrt() implementation
- *    - Measure max error across input range
- */

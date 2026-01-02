@@ -69,6 +69,8 @@ class Control extends Module {
     // WB stage signals for JAL/JALR hazard detection
     val regs_write_source_wb = Input(UInt(2.W))                                  // mem2wb.io.output_regs_write_source
     val rd_wb                = Input(UInt(Parameters.PhysicalRegisterAddrWidth)) // mem2wb.io.output_regs_write_address
+    // SFU control signals
+    val sfu_busy             = Input(Bool())                                     // ex.io.sfu_busy
 
     val if_flush = Output(Bool())
     val id_flush = Output(Bool())
@@ -157,10 +159,18 @@ class Control extends Module {
     io.rd_wb =/= 0.U &&
     (io.rd_wb === io.rs1_id || io.rd_wb === io.rs2_id)
 
+  // ============ SFU Busy Hazard Detection ============
+  // When SFU is processing a multi-cycle operation, stall the pipeline
+  // This prevents new instructions from entering EX stage while SFU is busy
+  val sfu_hazard = io.sfu_busy
+
   // Complex hazard detection for early branch resolution in ID stage
   when(
     // ============ Complex Hazard Detection Logic ============
     // This condition detects multiple hazard scenarios requiring stalls:
+
+        // --- Condition 0: SFU is busy (multi-cycle operation) ---
+        sfu_hazard ||
 
     // --- Condition 1: EX stage hazards (1-cycle dependencies) ---
     ((io.jump_instruction_id || io.memory_read_enable_ex) && // Either:
