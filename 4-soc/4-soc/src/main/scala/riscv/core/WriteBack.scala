@@ -18,6 +18,12 @@ class WriteBack extends Module {
 
     val regs_write_data = Output(UInt(Parameters.DataWidth))
   })
+  // Debug: Track writeback source and data
+  when(io.regs_write_source === CustomRegWriteSource.SFU) {
+    printf("[WriteBack] SFU writeback: alu_result=0x%x, regs_write_data=0x%x\n",
+      io.alu_result, io.regs_write_data)
+  }
+
   io.regs_write_data := MuxLookup(
     io.regs_write_source,
     io.alu_result

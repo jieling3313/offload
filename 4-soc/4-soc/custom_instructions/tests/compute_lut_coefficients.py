@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Compute Optimal LUT Coefficients for Exponential Approximation
-- 此腳本計算分段線性逼近 exp(x) 在 [-10, 10] 範圍內的最優係數 (a, b)。
-- 方法: 對每個段使用 Least squares fitting
-- Output: 可以直接複製到 ExponentialApproximator.scala 的 Scala 代碼
+- This script computes the optimal coefficients (a, b) of the piecewise linear approximation exp(x) in the range [-10, 10].
+- Method: Use Least squares fitting for each segment
+- Output: Scala code that can be copied directly into ExponentialApproximator.scala
 """
 
 import numpy as np
@@ -26,8 +26,8 @@ def float_to_ieee754_hex(value: float) -> str:
 
 def compute_segment_coefficients(segment_idx: int) -> Tuple[float, float]:
     """
-    使用最小平方法計算段的最佳 (a, b) 係數
-    For  i, approximate: exp(x) ≈ a*x + b
+    Compute the optimal (a, b) coefficients of the segment using the least squares method
+    For i, approximate: exp(x) ≈ a*x + b
     Args:
         segment_idx: Segment index (0-15)
     Returns:
@@ -69,7 +69,7 @@ def compute_segment_coefficients(segment_idx: int) -> Tuple[float, float]:
 
 def generate_scala_lut_code(coefficients: List[Tuple[float, float]]) -> str:
     """
-    生成 LUT initial的 Scala 代碼
+    Scala code to generate LUT initial
     """
     # Generate lut_a (slopes)
     scala_code = "  val lut_a = VecInit(Seq(\n"
@@ -119,7 +119,7 @@ def generate_scala_lut_code(coefficients: List[Tuple[float, float]]) -> str:
 
 def compute_overall_accuracy(coefficients: List[Tuple[float, float]]):
     """
-    計算所有段的整體逼近精度
+    Calculate the overall approximation accuracy of all segments
     """
     print("\n" + "="*70)
     print("Overall Accuracy Analysis")
@@ -144,12 +144,12 @@ def compute_overall_accuracy(coefficients: List[Tuple[float, float]]):
     abs_error = np.abs(y_true - y_approx)
     rel_error = abs_error / np.abs(y_true)
 
-    print(f"\nAbsolute Error / 絕對誤差:")
+    print(f"\nAbsolute Error:")
     print(f"  Max:  {np.max(abs_error):.6e}")
     print(f"  Mean: {np.mean(abs_error):.6e}")
     print(f"  Std:  {np.std(abs_error):.6e}")
 
-    print(f"\nRelative Error / 相對誤差:")
+    print(f"\nRelative Error:")
     print(f"  Max:  {np.max(rel_error):.6%}")
     print(f"  Mean: {np.mean(rel_error):.6%}")
     print(f"  Std:  {np.std(rel_error):.6%}")
@@ -164,15 +164,13 @@ def compute_overall_accuracy(coefficients: List[Tuple[float, float]]):
 def main():
     """Main function to compute and generate LUT coefficients"""
     print("Computing Optimal LUT Coefficients for Exponential Approximation")
-    print("計算指數逼近的最優 LUT 係數")
     print(f"\nConfiguration:")
     print(f"  Input range: [{INPUT_MIN}, {INPUT_MAX}]")
     print(f"  Number of segments: {NUM_SEGMENTS}")
     print(f"  Segment width: {SEGMENT_WIDTH}")
-    print(f"\n方法: Least squares linear fitting")
+    print(f"\nMethod: Least squares linear fitting")
 
     # Compute coefficients for each segment
-    # 計算每個段的係數
     coefficients = []
     for i in range(NUM_SEGMENTS):
         a, b = compute_segment_coefficients(i)

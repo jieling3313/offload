@@ -50,6 +50,19 @@ class ID2EX extends Module {
   })
   val stall = io.stall
 
+  // Debug: Track stall behavior
+  when(stall && io.output_instruction === 0x020505ab.U) {
+    printf("[ID2EX] STALLED with custom inst 0x020505ab\n")
+  }
+  // Debug: Track instruction input/output during stall
+  when(stall) {
+    printf("[ID2EX] STALL: in=0x%x, out=0x%x\n", io.instruction, io.output_instruction)
+  }
+  // Debug: Track flush events
+  when(io.flush) {
+    printf("[ID2EX] FLUSH TRIGGERED: in=0x%x, out=0x%x -> NOP\n", io.instruction, io.output_instruction)
+  }
+
   val instruction = Module(new PipelineRegister(defaultValue = InstructionsNop.nop))
   instruction.io.in     := io.instruction
   instruction.io.stall  := stall

@@ -77,11 +77,50 @@ class SpecialFunctionUnit extends Module {
   val result_reg = RegInit(0.U(32.W))
   val valid_reg = RegInit(false.B)
 
-  // Default outputs
+  // Track the last operation
+  val last_op_processed = RegInit(SFUOp.NOP)
+
+  // Counter to sDone state (2 cycles)
+  // For the instruction to leave EX
+  val done_counter = RegInit(0.U(1.W))
+
+  // Busy for 1 cycle after leaving sDone
+  val prev_state = RegNext(state, sIdle)
+  val just_left_sDone = (prev_state === sDone) && (state === sIdle)
+
+  // if is a new operation
+  val is_new_operation = io.op =/= last_op_processed
+
+  // Clear last_op_processed when start signal goes low (instruction left EX)
+  when(!io.start) {
+    last_op_processed := SFUOp.NOP
+  }
+
+  // Output result
+  // !!! The busy hold mechanism ensures ex2mem captures the result
   io.out := result_reg
   io.vec_out := 0.U
   io.vec_out_valid := false.B
-  io.busy := state =/= sIdle
+
+  // Problem: When >= 2 custom instructions execute:
+  //   1. First instruction completes, busy: 1->0, pipeline unstalls
+  //   2. Second instruction enters EX, start asserts, busy: 0->1
+  //   3. This 0->1 transition happens in the same cycle, but ID2EX PipelineRegister
+  //      uses combinational bypass (out := in when stall=false), so it already
+  //      started capturing the next instruction before busy could re-assert
+  //
+  // Solution 1: Make busy signal combinational with io.start signal
+  //   When io.start asserts (custom instruction enters EX), busy becomes true
+  //   IMMEDIATELY in the same cycle, preventing ID2EX from bypassing.
+  //
+  // Solution 2: Hold busy for 1 cycle after sDone
+  //   This allows the old instruction to leave EX, clearing operation_done,
+  //   before the new instruction can enter and re-assert operation_done.
+
+  // Combinational busy: true when executing, done, just left done, or about to start a new operation
+  io.busy := (state === sExecuting) || (state === sDone) ||
+             just_left_sDone ||  // Hold busy for 1 cycle after sDone
+             (state === sIdle && io.start && is_new_operation)  // Combinational start detection
   io.done := false.B
   io.valid := valid_reg
 
@@ -103,20 +142,27 @@ class SpecialFunctionUnit extends Module {
     is(sIdle) {
       valid_reg := false.B
 
-      when(io.start) {
+      // Start new operation only if different from the last operation
+      // Prevents restarting when instruction stays in EX during "sDone",
+      // Allows different custom instructions to execute
+      when(io.start && is_new_operation) {
         current_op := io.op
         state := sExecuting
+        last_op_processed := io.op  // Mark operation
+        printf("[SFU] New instruction detected, op=%d (was %d), in1=0x%x\n", io.op, last_op_processed, io.in1)
 
         // Initialize operation based on opcode
         switch(io.op) {
           is(SFUOp.EXP) {
             // Single exponential operation
+            printf("[SFU] Starting EXP operation, input=0x%x\n", io.in1)
             exp_unit.io.in := io.in1
             exp_unit.io.valid := true.B
           }
 
           is(SFUOp.RSQRT) {
             // Single inverse square root
+            printf("[SFU] Starting RSQRT operation, input=0x%x\n", io.in1)
             rsqrt_unit.io.in := io.in1
             rsqrt_unit.io.valid := true.B
           }
@@ -128,20 +174,24 @@ class SpecialFunctionUnit extends Module {
           }
 
           is(SFUOp.SOFTMAX) {
-            // TODO
+            // Complex softmax operation
+            // Will be handled in multi-cycle execution
           }
 
           is(SFUOp.RMSNORM) {
-            // TODO
+            // Complex RMSNorm operation
+            // Will be handled in multi-cycle execution
           }
         }
       }
     }
 
     is(sExecuting) {
+      // Handle different operations
       switch(current_op) {
         is(SFUOp.EXP) {
           when(exp_unit.io.out_valid) {
+            printf("[SFU] EXP result ready: 0x%x, transitioning to sDone\n", exp_unit.io.out)
             result_reg := exp_unit.io.out
             valid_reg := true.B
             state := sDone
@@ -150,6 +200,7 @@ class SpecialFunctionUnit extends Module {
 
         is(SFUOp.RSQRT) {
           when(rsqrt_unit.io.out_valid) {
+            printf("[SFU] RSQRT result ready: 0x%x, transitioning to sDone\n", rsqrt_unit.io.out)
             result_reg := rsqrt_unit.io.out
             valid_reg := true.B
             state := sDone
@@ -169,21 +220,31 @@ class SpecialFunctionUnit extends Module {
         }
 
         is(SFUOp.SOFTMAX) {
-          // TODO
+          // TODO: Implement full softmax
           state := sDone
         }
 
         is(SFUOp.RMSNORM) {
-          // TODO
+          // TODO: Implement full RMSNorm
           state := sDone
         }
       }
     }
 
     is(sDone) {
-      io.done := true.B
-      valid_reg := false.B
-      state := sIdle
+      // Stay in sDone for 2 cycles to ensure:
+      // 1. Result is stable for ex2mem to capture
+      // 2. Instruction has time to leave EX stage so operation_done can be cleared
+      when(done_counter === 0.U) {
+        printf("[SFU] sDone cycle 1: result_reg=0x%x\n", result_reg)
+        done_counter := 1.U
+        io.done := false.B  // Not done yet
+      }.otherwise {
+        printf("[SFU] sDone cycle 2: result_reg=0x%x, transitioning to sIdle\n", result_reg)
+        done_counter := 0.U
+        state := sIdle
+        io.done := true.B  // Now done
+      }
     }
   }
 }
@@ -329,7 +390,3 @@ class SoftmaxAccelerator extends Module {
     }
   }
 }
-
-/**
- * FP Divider (placeholder)
- */

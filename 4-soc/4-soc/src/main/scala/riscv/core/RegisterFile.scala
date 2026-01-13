@@ -40,6 +40,10 @@ class RegisterFile extends Module {
     when(io.write_enable && io.write_address =/= 0.U) {
       // Map x1-x31 to indices 0-30 in physical storage
       registers(io.write_address - 1.U) := io.write_data
+      // Debug: Track register writes to a0 and a1
+      when(io.write_address === 10.U || io.write_address === 11.U) {
+        printf("[RegFile] Writing x%d = 0x%x\n", io.write_address, io.write_data)
+      }
     }
   }
 

@@ -103,6 +103,11 @@ class InstructionFetch extends Module {
   io.instruction_address := pc
   io.id_instruction      := Mux(io.instruction_valid, io.rom_instruction, InstructionsNop.nop)
 
+  // Debug: Track PC and instruction execution
+  when(io.instruction_valid) {
+    printf("[IF] PC=0x%x, fetching inst=0x%x\n", pc, io.rom_instruction)
+  }
+
   // BTB update interface - connect external update signals to BTB
   btb.io.update_valid  := io.btb_update_valid
   btb.io.update_pc     := io.btb_update_pc

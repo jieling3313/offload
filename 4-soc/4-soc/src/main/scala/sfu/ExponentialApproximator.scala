@@ -6,13 +6,12 @@ import chisel3._
 import chisel3.util._
 
 /**
- * 使用分段線性方法的指數逼近器
  *
  * Algorithm: For segment i, exp(x) ≈ a_i * x + b_i
  *
- * Input範圍: [-10, 10] (超出範圍的值會飽和)
+ * Input range: [-10, 10] (values ​​outside the range will be saturated)
  *
- * 段數: 16 段
+ * 16 segments
  *
  * Latency: 5 cycles (pipelined)
  *

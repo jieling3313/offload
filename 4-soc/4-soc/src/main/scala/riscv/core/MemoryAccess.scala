@@ -7,6 +7,7 @@ package riscv.core
 import chisel3._
 import chisel3.util._
 import riscv.core.BusBundle
+import riscv.core.CustomRegWriteSource
 import riscv.Parameters
 
 object MemoryAccessStates extends ChiselEnum {
@@ -219,6 +220,7 @@ class MemoryAccess extends Module {
       io.bus.request := true.B
       when(io.bus.granted) {
         mem_access_state := MemoryAccessStates.Write
+        printf("[MemoryAccess] Starting WRITE: addr=0x%x, data=0x%x\n", io.bus.address, io.bus.write_data)
       }
     }
   }
@@ -249,7 +251,8 @@ class MemoryAccess extends Module {
     Seq(
       RegWriteSource.Memory                 -> io.wb_memory_read_data,
       RegWriteSource.CSR                    -> io.csr_read_data,
-      RegWriteSource.NextInstructionAddress -> (io.instruction_address + 4.U)
+      RegWriteSource.NextInstructionAddress -> (io.instruction_address + 4.U),
+      CustomRegWriteSource.SFU              -> io.alu_result  // SFU result comes through alu_result
     )
   )
 

@@ -1,0 +1,50 @@
+  val reciprocal_lut = VecInit(Seq(
+    "h3f800000".U(32.W),  // [ 0] 1/1.000000 = 1.000000
+    "h3f70f0f1".U(32.W),  // [ 1] 1/1.062500 = 0.941176
+    "h3f638e39".U(32.W),  // [ 2] 1/1.125000 = 0.888889
+    "h3f579436".U(32.W),  // [ 3] 1/1.187500 = 0.842105
+    "h3f4ccccd".U(32.W),  // [ 4] 1/1.250000 = 0.800000
+    "h3f430c31".U(32.W),  // [ 5] 1/1.312500 = 0.761905
+    "h3f3a2e8c".U(32.W),  // [ 6] 1/1.375000 = 0.727273
+    "h3f321643".U(32.W),  // [ 7] 1/1.437500 = 0.695652
+    "h3f2aaaab".U(32.W),  // [ 8] 1/1.500000 = 0.666667
+    "h3f23d70a".U(32.W),  // [ 9] 1/1.562500 = 0.640000
+    "h3f1d89d9".U(32.W),  // [10] 1/1.625000 = 0.615385
+    "h3f17b426".U(32.W),  // [11] 1/1.687500 = 0.592593
+    "h3f124925".U(32.W),  // [12] 1/1.750000 = 0.571429
+    "h3f0d3dcb".U(32.W),  // [13] 1/1.812500 = 0.551724
+    "h3f088889".U(32.W),  // [14] 1/1.875000 = 0.533333
+    "h3f042108".U(32.W)  // [15] 1/1.937500 = 0.516129
+  ))
+
+  /** 
+   * Stage 0: Initial Reciprocal Guess (Combinational) 
+   * Method: LUT-based mantissa + exponent flip
+   *
+   * For b with exponent exp_b, reciprocal 1/b has exponent (254 - exp_b)
+   * Mantissa is looked up from LUT using high 4 bits of b's mantissa
+   *
+   */
+
+  val exp_b = io.b(30, 23)
+
+  // Extract mantissa index (high 4 bits of mantissa)
+  val mant_idx = io.b(22, 19)  // Bits [22:19]
+
+  // Lookup reciprocal mantissa from LUT (full IEEE 754 value)
+  val recip_mant_lut = reciprocal_lut(mant_idx)
+
+  // Extract exponent from LUT to check if reciprocal < 1.0
+  val lut_exp = recip_mant_lut(30, 23)
+
+  // Reciprocal exponent calculation:
+  // If LUT value has exp=126 (reciprocal < 1.0), adjust by -1
+  // If LUT value has exp=127 (reciprocal >= 1.0), use standard formula
+  val exp_adjust = Mux(lut_exp === 126.U, 1.U, 0.U)
+  val recip_exp = 254.U - exp_b - exp_adjust
+
+  // Extract mantissa component from LUT result
+  val lut_mant = recip_mant_lut(22, 0)
+
+  // Initial guess: sign=0, adjusted exponent, LUT mantissa
+  val x0 = Cat(0.U(1.W), recip_exp, lut_mant)

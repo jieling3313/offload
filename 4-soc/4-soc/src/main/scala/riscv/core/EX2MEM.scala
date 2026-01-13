@@ -79,6 +79,16 @@ class EX2MEM extends Module {
   alu_result.io.flush  := flush
   io.output_alu_result := alu_result.io.out
 
+  // Debug: Track ALL alu_result captures when write_enable is set
+  when(!stall && io.regs_write_enable && io.regs_write_source === 3.U) {
+    printf("[EX2MEM] Capturing SFU: input=0x%x, output_will_be=0x%x, rd=%d\n",
+      io.alu_result, io.alu_result, io.regs_write_address)
+  }
+  when(stall && io.regs_write_enable && io.regs_write_source === 3.U) {
+    printf("[EX2MEM] STALLED (SFU busy): NOT capturing, input=0x%x, rd=%d\n",
+      io.alu_result, io.regs_write_address)
+  }
+
   val memory_read_enable = Module(new PipelineRegister(1))
   memory_read_enable.io.in     := io.memory_read_enable
   memory_read_enable.io.stall  := stall

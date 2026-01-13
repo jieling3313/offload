@@ -76,18 +76,29 @@ class Forwarding extends Module {
   // ==================== EX Stage Forwarding Logic ====================
   // Forwarding for ALU operations and memory address calculation
 
+  // Debug: Always show forwarding decision for non-zero rs1
+  when(io.rs1_ex =/= 0.U) {
+    printf("[Forwarding] rs1_ex=%d: write_en_mem=%d, rd_mem=%d, write_en_wb=%d, rd_wb=%d\n",
+      io.rs1_ex, io.reg_write_enable_mem, io.rd_mem, io.reg_write_enable_wb, io.rd_wb)
+  }
+
   // EX stage rs1 forwarding: Resolve RAW hazards for first ALU operand
   when(io.reg_write_enable_mem && io.rs1_ex === io.rd_mem && io.rd_mem =/= 0.U) {
     // Priority 1: Forward from EX/MEM stage (1-cycle RAW hazard)
     // Most recent result takes precedence
     io.reg1_forward_ex := ForwardingType.ForwardFromMEM
+    printf("[Forwarding]   -> Forwarding from MEM\n")
   }.elsewhen(io.reg_write_enable_wb && io.rs1_ex === io.rd_wb && io.rd_wb =/= 0.U) {
     // Priority 2: Forward from MEM/WB stage (2-cycle RAW hazard)
     // Older result if no newer hazard exists
     io.reg1_forward_ex := ForwardingType.ForwardFromWB
+    printf("[Forwarding]   -> Forwarding from WB\n")
   }.otherwise {
     // No hazard: Use register file value
     io.reg1_forward_ex := ForwardingType.NoForward
+    when(io.rs1_ex =/= 0.U) {
+      printf("[Forwarding]   -> NO forward\n")
+    }
   }
 
   // EX stage rs2 forwarding: Resolve RAW hazards for second ALU operand

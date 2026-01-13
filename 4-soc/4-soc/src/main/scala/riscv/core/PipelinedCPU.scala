@@ -146,7 +146,6 @@ class PipelinedCPU extends Module {
   // WB stage signals for JAL/JALR hazard detection (pipeline register delay fix)
   ctrl.io.regs_write_source_wb := mem2wb.io.output_regs_write_source
   ctrl.io.rd_wb                := mem2wb.io.output_regs_write_address
-  // SFU busy signal for multi-cycle operation stall
   ctrl.io.sfu_busy             := ex.io.sfu_busy
 
   regs.io.write_enable  := mem2wb.io.output_regs_write_enable
@@ -162,7 +161,7 @@ class PipelinedCPU extends Module {
   val mem_stall = mem.io.ctrl_stall_flag
 
   io.instruction_address          := inst_fetch.io.instruction_address
-  inst_fetch.io.stall_flag_ctrl   := ctrl.io.pc_stall || mem_stall
+  inst_fetch.io.stall_flag_ctrl   := ctrl.io.pc_stall || mem_stall || ex.io.sfu_busy
   inst_fetch.io.jump_flag_id      := id.io.if_jump_flag
   inst_fetch.io.jump_address_id   := id.io.if_jump_address
   inst_fetch.io.rom_instruction   := io.instruction
@@ -211,7 +210,7 @@ class PipelinedCPU extends Module {
   inst_fetch.io.btb_update_target := id.io.if_jump_address
   inst_fetch.io.btb_update_taken  := id.io.if_jump_flag && id_is_branch_or_jump // Non-branch = not taken
 
-  if2id.io.stall := ctrl.io.if_stall || mem_stall
+  if2id.io.stall := ctrl.io.if_stall || mem_stall || ex.io.sfu_busy
   // CRITICAL FIX: Suppress IF2ID flush during mem_stall!
   //
   // When a JAL/JALR triggers if_flush while mem_stall is active:
@@ -256,7 +255,17 @@ class PipelinedCPU extends Module {
   id.io.interrupt_handler_address := clint.io.id_interrupt_handler_address
   id.io.branch_hazard             := ctrl.io.branch_hazard
 
-  id2ex.io.stall := mem_stall
+  // Stall ID/EX for both memory operations AND control hazards (SFU busy, load-use, etc.)
+  // CRITICAL: When SFU is busy, ID/EX must be stalled to prevent next instruction
+  // from entering EX stage and overwriting the SFU instruction's destination register
+  // ctrl.io.if_stall handles general hazards, but SFU also needs id2ex stall
+  id2ex.io.stall := mem_stall || ctrl.io.if_stall || ex.io.sfu_busy
+
+  // Debug: Track id2ex stall
+  when(ex.io.sfu_busy) {
+    printf("[PipelinedCPU] SFU busy: id2ex.stall=%d, mem_stall=%d, if_stall=%d, sfu_busy=%d\n",
+      id2ex.io.stall, mem_stall, ctrl.io.if_stall, ex.io.sfu_busy)
+  }
   // Do not flush id2ex when mem_stall is active - EXCEPT for JAL/JALR hazards!
   // When the memory is stalling (e.g., multi-cycle store), the id2ex register holds
   // the instruction waiting in EX stage. For load-use hazards, the flush is suppressed
@@ -266,7 +275,16 @@ class PipelinedCPU extends Module {
   // Without this, sw ra captures the stale register file value instead of waiting
   // for the correct forwarded PC+4 value from the JAL/JALR instruction.
   // This was the root cause of the vga_simple bug where sw ra saved 0x1050 instead of 0x125c.
-  id2ex.io.flush               := ctrl.io.id_flush && (!mem_stall || ctrl.io.jal_jalr_hazard)
+  //
+  // CRITICAL FIX: During SFU operations, disable jal_jalr_hazard flush because:
+  // 1. Custom instructions may be misidentified as JAL/JALR by the control unit
+  // 2. Flushing during SFU busy destroys the custom instruction in EX stage
+  // 3. SFU stall already prevents hazards from propagating
+  when(ctrl.io.id_flush && (!mem_stall || ctrl.io.jal_jalr_hazard) && !ex.io.sfu_busy) {
+    printf("[PipelinedCPU] ID2EX FLUSH: id_flush=%d, mem_stall=%d, jal_jalr_hazard=%d, sfu_busy=%d\n",
+      ctrl.io.id_flush, mem_stall, ctrl.io.jal_jalr_hazard, ex.io.sfu_busy)
+  }
+  id2ex.io.flush               := ctrl.io.id_flush && (!mem_stall || ctrl.io.jal_jalr_hazard) && !ex.io.sfu_busy
   id2ex.io.instruction         := if2id.io.output_instruction
   id2ex.io.instruction_address := if2id.io.output_instruction_address
 
@@ -317,7 +335,7 @@ class PipelinedCPU extends Module {
   ex.io.reg1_forward        := forwarding.io.reg1_forward_ex
   ex.io.reg2_forward        := forwarding.io.reg2_forward_ex
 
-  ex2mem.io.stall               := mem_stall
+  ex2mem.io.stall               := mem_stall || ex.io.sfu_busy
   ex2mem.io.regs_write_enable   := id2ex.io.output_regs_write_enable
   ex2mem.io.regs_write_source   := id2ex.io.output_regs_write_source
   ex2mem.io.regs_write_address  := id2ex.io.output_regs_write_address
