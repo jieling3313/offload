@@ -77,6 +77,14 @@ test-sfu-divider:
 	@echo "Testing FPDivider..."
 	sbt "testOnly sfu.FPDividerTest"
 
+test-sfu-rmsnorm:
+	@echo "Testing RMSNorm Accelerator..."
+	sbt "testOnly sfu.RMSNormTest"
+
+test-sfu-softmax:
+	@echo "Testing Softmax Accelerator..."
+	sbt "testOnly sfu.SoftmaxTest"
+
 test-sfu-integration:
 	@echo "Testing SpecialFunctionUnit Integration..."
 	sbt "testOnly sfu.SpecialFunctionUnitTest"
@@ -336,6 +344,8 @@ help:
 	@echo "    make test-sfu-rsqrt        - Test VRSQRT (InvSqrt)"
 	@echo "    make test-sfu-accumulator  - Test VREDSUM (VectorAccumulator)"
 	@echo "    make test-sfu-divider      - Test FPDivider"
+	@echo "    make test-sfu-rmsnorm      - Test RMSNorm Accelerator"
+	@echo "    make test-sfu-softmax      - Test Softmax Accelerator"
 	@echo "    make test-sfu-integration  - Test SpecialFunctionUnit"
 	@echo ""
 	@echo "  CPU Integration Tests:"
@@ -380,7 +390,7 @@ help:
 
 .PHONY: verilator test indent demo compliance clean distclean help \
         test-sfu test-sfu-exp test-sfu-rsqrt test-sfu-accumulator \
-        test-sfu-divider test-sfu-integration test-custom \
+        test-sfu-divider test-sfu-rmsnorm test-sfu-softmax test-sfu-integration test-custom \
         test-single-vexp test-two-instructions test-e2e \
         test-sfu-all test-quick \
         build-asm build-custom-inst build-single-vexp build-two-inst \
