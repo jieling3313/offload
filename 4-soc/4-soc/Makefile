@@ -50,7 +50,10 @@ ASFLAGS  = -march=rv32i -mabi=ilp32
 LDFLAGS  = -T $(LINKER_SCRIPT)
 
 # Test Commands
-test:
+test: build-asm
+	@echo "================================================================"
+	@echo "  Building assembly test programs before running tests..."
+	@echo "================================================================"
 	sbt test
 
 # SFU Unit Tests
@@ -92,22 +95,22 @@ test-sfu-integration:
 # CPU Integration Tests
 
 # Run all custom instruction tests
-test-custom:
+test-custom: build-asm
 	@echo "═================================================================"
 	@echo "                 Running Custom Instruction Tests"
 	@echo "================================================================"
 	sbt "testOnly riscv.SingleVexpTest riscv.TwoInstructionsTest riscv.CustomInstructionE2ETest"
 
 # Individual integration tests
-test-single-vexp:
+test-single-vexp: build-asm
 	@echo "Testing Single VEXP Instruction..."
 	sbt "testOnly riscv.SingleVexpTest"
 
-test-two-instructions:
+test-two-instructions: build-asm
 	@echo "Testing Two Sequential Instructions (VEXP + VRSQRT)..."
 	sbt "testOnly riscv.TwoInstructionsTest"
 
-test-e2e:
+test-e2e: build-asm
 	@echo "Testing End-to-End (4 instructions)..."
 	sbt "testOnly riscv.CustomInstructionE2ETest"
 
@@ -121,7 +124,7 @@ test-sfu-all: test-sfu test-custom
 	@echo "================================================================"
 
 # Quick  test
-test-quick:
+test-quick: build-asm
 	@echo " Running quick smoke tests..."
 	sbt "testOnly sfu.ExponentialApproximatorTest sfu.InvSqrtTest riscv.SingleVexpTest"
 
